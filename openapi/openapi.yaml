@@ -1,0 +1,301 @@
+openapi: 3.1.0
+info:
+  title: ResearchPilot API
+  version: 1.0.0
+servers:
+  - url: http://127.0.0.1:5000/api/v1
+paths:
+  /health:
+    get:
+      operationId: getHealth
+      responses:
+        "200":
+          description: API and MongoDB are available.
+  /auth/register:
+    post:
+      operationId: registerUser
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterRequest"
+      responses:
+        "201":
+          description: Account created and a bearer session issued.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthSession"
+        "400":
+          description: Invalid registration input.
+        "409":
+          description: Email is already registered.
+        "429":
+          description: Authentication rate limit exceeded.
+  /auth/login:
+    post:
+      operationId: loginUser
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: Authenticated user and bearer session.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthSession"
+        "400":
+          description: Invalid request.
+        "401":
+          description: Email or password is incorrect.
+        "429":
+          description: Authentication rate limit exceeded.
+  /auth/me:
+    get:
+      operationId: getCurrentUser
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Current authenticated user.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthUser"
+        "401":
+          description: Missing, invalid, or expired session.
+  /auth/logout:
+    post:
+      operationId: logoutUser
+      security:
+        - bearerAuth: []
+      responses:
+        "204":
+          description: Session revoked.
+        "401":
+          description: Missing, invalid, or expired session.
+  /auth/demo:
+    post:
+      operationId: createDevelopmentDemoSession
+      description: Development and test only; disabled in production.
+      responses:
+        "200":
+          description: Development demo user and bearer session.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthSession"
+        "404":
+          description: Demo authentication is disabled.
+  /research-jobs:
+    get:
+      operationId: listResearchJobs
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Latest research jobs.
+        "401":
+          description: Missing, invalid, or expired bearer session.
+    post:
+      operationId: createResearchJob
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateResearchJob"
+      responses:
+        "202":
+          description: Job persisted and queued.
+        "400":
+          description: Invalid research request.
+        "401":
+          description: Missing, invalid, or expired bearer session.
+  /research-jobs/{jobId}:
+    parameters:
+      - $ref: "#/components/parameters/JobId"
+    get:
+      operationId: getResearchJob
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Research job state, including safe failure details when present.
+        "404":
+          description: Job not found.
+        "401":
+          description: Missing, invalid, or expired bearer session.
+  /research-jobs/{jobId}/report:
+    parameters:
+      - $ref: "#/components/parameters/JobId"
+    get:
+      operationId: getResearchReport
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Completed report.
+        "409":
+          description: Report is not ready.
+        "401":
+          description: Missing, invalid, or expired bearer session.
+  /research-jobs/{jobId}/events:
+    parameters:
+      - $ref: "#/components/parameters/JobId"
+    get:
+      operationId: streamResearchEvents
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: Last-Event-ID
+          in: header
+          schema:
+            type: integer
+            minimum: 0
+      responses:
+        "200":
+          description: Server-sent events with persisted replay.
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        "401":
+          description: Missing, invalid, or expired bearer session.
+  /research-jobs/{jobId}/cancel:
+    parameters:
+      - $ref: "#/components/parameters/JobId"
+    post:
+      operationId: cancelResearchJob
+      security:
+        - bearerAuth: []
+      responses:
+        "202":
+          description: Cancellation accepted.
+        "409":
+          description: Job is already terminal.
+        "401":
+          description: Missing, invalid, or expired bearer session.
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  parameters:
+    JobId:
+      name: jobId
+      in: path
+      required: true
+      schema:
+        type: string
+  schemas:
+    RegisterRequest:
+      type: object
+      additionalProperties: false
+      required: [name, email, password]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        email:
+          type: string
+          format: email
+          maxLength: 254
+        password:
+          type: string
+          minLength: 8
+          maxLength: 128
+    LoginRequest:
+      type: object
+      additionalProperties: false
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+          maxLength: 254
+        password:
+          type: string
+          minLength: 1
+          maxLength: 128
+    AuthUser:
+      type: object
+      required: [id, email, name, role, twoFactorEnabled]
+      properties:
+        id:
+          type: string
+        email:
+          type: string
+          format: email
+        name:
+          type: string
+        role:
+          type: string
+          enum: [user]
+        twoFactorEnabled:
+          type: boolean
+          const: false
+    AuthSession:
+      type: object
+      required: [user, accessToken, expiresAt]
+      properties:
+        user:
+          $ref: "#/components/schemas/AuthUser"
+        accessToken:
+          type: string
+        expiresAt:
+          type: string
+          format: date-time
+    CreateResearchJob:
+      type: object
+      additionalProperties: false
+      required: [goal]
+      properties:
+        goal:
+          type: string
+          minLength: 1
+          maxLength: 1000
+        alternatives:
+          type: array
+          maxItems: 5
+          items:
+            type: string
+            minLength: 1
+            maxLength: 120
+        criteria:
+          type: array
+          maxItems: 10
+          items:
+            type: object
+            additionalProperties: false
+            required: [id, label, weight]
+            properties:
+              id:
+                type: string
+                pattern: "^[a-z0-9][a-z0-9-]{0,63}$"
+              label:
+                type: string
+                minLength: 1
+                maxLength: 120
+              weight:
+                type: integer
+                minimum: 1
+                maximum: 5
+        constraints:
+          type: array
+          maxItems: 10
+          items:
+            type: string
+            minLength: 1
+            maxLength: 500
+        depth:
+          type: string
+          enum: [quick, standard, deep]
