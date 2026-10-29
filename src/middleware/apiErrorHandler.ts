@@ -1,3 +1,4 @@
+import { messages } from "../config/messages.js";
 import type { ErrorRequestHandler } from "express";
 import { ZodError } from "zod";
 import { isAppError } from "../utils/AppError.js";
@@ -12,7 +13,7 @@ export const apiErrorHandler: ErrorRequestHandler = (error, _request, response, 
     response.status(400).json({
       error: {
         code: "VALIDATION_ERROR",
-        message: "The request body is invalid.",
+        message: messages.VALIDATION_ERROR,
         retryable: false,
         requestId: response.locals.requestId,
         details: error.issues.map((issue) => ({ path: issue.path.join("."), message: issue.message })),
@@ -37,7 +38,7 @@ export const apiErrorHandler: ErrorRequestHandler = (error, _request, response, 
     response.status(400).json({
       error: {
         code: "INVALID_JSON",
-        message: "The request body must contain valid JSON.",
+        message: messages.INVALID_JSON,
         retryable: false,
         requestId: response.locals.requestId,
       },
@@ -49,7 +50,7 @@ export const apiErrorHandler: ErrorRequestHandler = (error, _request, response, 
     response.status(413).json({
       error: {
         code: "PAYLOAD_TOO_LARGE",
-        message: "The request body must not exceed 32 KB.",
+        message: messages.PAYLOAD_TOO_LARGE,
         retryable: false,
         requestId: response.locals.requestId,
       },
@@ -61,7 +62,7 @@ export const apiErrorHandler: ErrorRequestHandler = (error, _request, response, 
   response.status(500).json({
     error: {
       code: "INTERNAL_ERROR",
-      message: "An unexpected error occurred.",
+      message: messages.INTERNAL_ERROR,
       retryable: true,
       requestId: response.locals.requestId,
     },

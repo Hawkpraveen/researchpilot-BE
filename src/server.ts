@@ -3,13 +3,17 @@ import { createApp } from "./app.js";
 import { connectDatabase, disconnectDatabase } from "./config/database.js";
 import { loadEnvironment } from "./config/env.js";
 import { researchJobsService } from "./container.js";
+import { ensureAuthSessionIndexes } from "./models/auth/authSession.model.js";
+import { ensureProviderSettingsIndexes } from "./models/settings/providerSettings.model.js";
 
 async function startServer() {
   const environment = loadEnvironment();
   await connectDatabase(environment.MONGODB_URI);
+  await ensureAuthSessionIndexes();
+  await ensureProviderSettingsIndexes();
   await researchJobsService.recoverInterruptedJobs();
 
-  const app = createApp(environment.WEB_ORIGIN, environment.NODE_ENV !== "production");
+  const app = createApp(environment.WEB_ORIGIN);
   const server = app.listen(environment.PORT, "127.0.0.1", () => {
     console.log(`ResearchPilot BE listening on http://127.0.0.1:${environment.PORT}`);
   });

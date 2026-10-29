@@ -4,11 +4,19 @@ import { createMongoResearchJobsRepository } from "./repositories/research-jobs/
 import { createMongoResearchReportsRepository } from "./repositories/research-reports/researchReports.repository.js";
 import { createResearchAgentClient } from "./services/research-agent/researchAgent.client.js";
 import { createResearchJobsService } from "./services/research-jobs/researchJobs.service.js";
+import { providerSettingsRepository } from "./repositories/settings/providerSettings.repository.js";
+import { defaultProviderSettings } from "./config/providerSettings.js";
 
 const environment = loadEnvironment();
 const jobs = createMongoResearchJobsRepository();
 const events = createMongoResearchEventsRepository();
 const reports = createMongoResearchReportsRepository();
-const agent = createResearchAgentClient(environment.AGENT_BASE_URL, environment.AGENT_TIMEOUT_MS);
+const agent = createResearchAgentClient(environment.AGENT_BASE_URL, environment.AGENT_TIMEOUT_MS, fetch, async (job) => {
+  const config = await providerSettingsRepository.find({ tenant_id: job.tenantId, workspace_id: job.workspaceId });
+  // Credentials are sent only to the private agent, never stored on jobs or returned to browsers.
+  return config ? {
+    mode: config.mode, provider: config.provider, endpoint: config.endpoint, model: config.model, apiKey: config.api_key ?? "",
+  } : { ...defaultProviderSettings };
+});
 
 export const researchJobsService = createResearchJobsService({ jobs, events, reports, agent });

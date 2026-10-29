@@ -4,8 +4,8 @@ import type { ResearchJobRecord, ResearchStatus } from "../../models/research-jo
 export interface ResearchJobsRepository {
   create(record: ResearchJobRecord): Promise<ResearchJobRecord>;
   findById(id: string): Promise<ResearchJobRecord | null>;
-  listForOwner(ownerId: string, limit: number): Promise<ResearchJobRecord[]>;
-  findByIdForOwner(id: string, ownerId: string): Promise<ResearchJobRecord | null>;
+  listForScope(scope: { tenantId: string; workspaceId: string; ownerId: string }, limit: number): Promise<ResearchJobRecord[]>;
+  findByIdForScope(id: string, scope: { tenantId: string; workspaceId: string; ownerId: string }): Promise<ResearchJobRecord | null>;
   update(id: string, update: Partial<ResearchJobRecord>, allowedStatuses?: ResearchStatus[]): Promise<ResearchJobRecord | null>;
   findByStatus(status: ResearchStatus): Promise<ResearchJobRecord[]>;
 }
@@ -18,11 +18,11 @@ export function createMongoResearchJobsRepository(): ResearchJobsRepository {
     findById(id) {
       return ResearchJobModel.findById(id).lean<ResearchJobRecord>().exec();
     },
-    listForOwner(ownerId, limit) {
-      return ResearchJobModel.find({ ownerId }).sort({ createdAt: -1 }).limit(limit).lean<ResearchJobRecord[]>().exec();
+    listForScope(scope, limit) {
+      return ResearchJobModel.find(scope).sort({ createdAt: -1 }).limit(limit).lean<ResearchJobRecord[]>().exec();
     },
-    findByIdForOwner(id, ownerId) {
-      return ResearchJobModel.findOne({ _id: id, ownerId }).lean<ResearchJobRecord>().exec();
+    findByIdForScope(id, scope) {
+      return ResearchJobModel.findOne({ _id: id, ...scope }).lean<ResearchJobRecord>().exec();
     },
     update(id, update, allowedStatuses) {
       const filter = allowedStatuses ? { _id: id, status: { $in: allowedStatuses } } : { _id: id };

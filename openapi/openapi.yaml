@@ -245,13 +245,13 @@ components:
           const: false
     AuthSession:
       type: object
-      required: [user, accessToken, expiresAt]
+      required: [user, access_token, expires_at]
       properties:
         user:
           $ref: "#/components/schemas/AuthUser"
-        accessToken:
+        access_token:
           type: string
-        expiresAt:
+        expires_at:
           type: string
           format: date-time
     CreateResearchJob:

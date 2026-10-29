@@ -1,22 +1,12 @@
-
 import { Types } from "mongoose";
 
 export type UserRole = "user" | "owner";
 
-export type AccountStatus =
-  | "active"
-  | "inactive"
-  | "deleted"
-  | "suspended";
+export type AccountStatus = "active" | "inactive" | "deleted" | "suspended";
 
-export type AuthType =
-  | "basic_auth"
-  | "google"
-  | "microsoft";
+export type AuthType = "basic_auth" | "google" | "microsoft";
 
-export type MicrosoftAccountType =
-  | "personal"
-  | "organization";
+export type MicrosoftAccountType = "personal" | "organization";
 
 export interface AuthUserRecord {
   _id: Types.ObjectId;
@@ -25,7 +15,7 @@ export interface AuthUserRecord {
   active_workspace_id?: Types.ObjectId;
 
   first_name: string;
-  last_name?: string;
+  last_name: string;
   display_name?: string;
   profile_url?: string;
 
@@ -60,4 +50,12 @@ export interface AuthUserRecord {
 
   created_at: Date;
   updated_at: Date;
+}
+
+export interface AuthSessionRecord {
+  _id: Types.ObjectId;
+  user_id: Types.ObjectId;
+  token_hash: string;
+  expires_at: Date;
+  created_at: Date;
 }

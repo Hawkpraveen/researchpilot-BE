@@ -12,11 +12,9 @@ import type { ResearchReportsRepository } from "../../repositories/research-repo
 import { createAppError, isAppError } from "../../utils/AppError.js";
 import type { ResearchAgent } from "../research-agent/researchAgent.client.js";
 import type { CreateResearchJobInput } from "./researchJobs.validation.js";
-import { createStubReport } from "./stubResearchAgent.service.js";
 
 const activeStatuses: ResearchStatus[] = ["queued", "planning", "researching", "verifying", "analyzing", "quality_check"];
 const terminalStatuses: ResearchStatus[] = ["completed", "failed", "cancelled"];
-const wait = (milliseconds: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
 export interface ResearchJobsServiceDependencies {
   jobs: ResearchJobsRepository;
@@ -28,16 +26,16 @@ export interface ResearchJobsServiceDependencies {
 }
 
 export type ResearchJobsService = ReturnType<typeof createResearchJobsService>;
+export interface ResearchScope { tenantId: string; workspaceId: string; ownerId: string }
 
 export function createResearchJobsService(dependencies: ResearchJobsServiceDependencies) {
   const schedule = dependencies.schedule ?? ((work: () => Promise<void>) => setTimeout(() => void work(), 0));
-  const pause = dependencies.pause ?? wait;
 
-  async function create(input: CreateResearchJobInput, ownerId: string) {
+  async function create(input: CreateResearchJobInput, scope: ResearchScope) {
     const now = new Date();
     const record: ResearchJobRecord = {
       _id: `job_${randomUUID()}`,
-      ownerId,
+      ...scope,
       request: input,
       status: "queued",
       currentStage: "Queued",
@@ -69,20 +67,20 @@ export function createResearchJobsService(dependencies: ResearchJobsServiceDepen
     };
   }
 
-  async function list(ownerId: string): Promise<ResearchJobView[]> {
-    const jobs = await dependencies.jobs.listForOwner(ownerId, 50);
+  async function list(scope: ResearchScope): Promise<ResearchJobView[]> {
+    const jobs = await dependencies.jobs.listForScope(scope, 50);
     const reports = await Promise.all(jobs.map((job) => dependencies.reports.findByJobId(job._id)));
     return jobs.map((job, index) => toJobView(job, reports[index] ? toReportView(reports[index]) : undefined));
   }
 
-  async function get(id: string, ownerId: string): Promise<ResearchJobView> {
-    const job = await requireJob(id, ownerId);
+  async function get(id: string, scope: ResearchScope): Promise<ResearchJobView> {
+    const job = await requireJob(id, scope);
     const report = await dependencies.reports.findByJobId(id);
     return toJobView(job, report ? toReportView(report) : undefined);
   }
 
-  async function getReport(id: string, ownerId: string): Promise<ResearchReportView> {
-    const job = await requireJob(id, ownerId);
+  async function getReport(id: string, scope: ResearchScope): Promise<ResearchReportView> {
+    const job = await requireJob(id, scope);
     if (job.status !== "completed") {
       throw createAppError(409, "REPORT_NOT_READY", "The report is not ready yet.", true);
     }
@@ -99,8 +97,8 @@ export function createResearchJobsService(dependencies: ResearchJobsServiceDepen
     };
   }
 
-  async function cancel(id: string, ownerId: string) {
-    const job = await requireJob(id, ownerId);
+  async function cancel(id: string, scope: ResearchScope) {
+    const job = await requireJob(id, scope);
     if (terminalStatuses.includes(job.status)) {
       throw createAppError(409, "JOB_ALREADY_FINISHED", "A finished research job cannot be cancelled.");
     }
@@ -119,8 +117,8 @@ export function createResearchJobsService(dependencies: ResearchJobsServiceDepen
     return { jobId: id, status: "cancelled" as const };
   }
 
-  async function eventsAfter(id: string, sequence: number, ownerId: string): Promise<ResearchEventRecord[]> {
-    await requireJob(id, ownerId);
+  async function eventsAfter(id: string, sequence: number, scope: ResearchScope): Promise<ResearchEventRecord[]> {
+    await requireJob(id, scope);
     return dependencies.events.listAfter(id, sequence, 100);
   }
 
@@ -172,37 +170,30 @@ export function createResearchJobsService(dependencies: ResearchJobsServiceDepen
     if (!planned) return;
     await dependencies.events.append(id, "planning", "stage", `Agent prepared ${agentPlan.tasks.length} bounded research tasks.`);
 
-    const stages: Array<{ status: ResearchStatus; label: string; message: string }> = [
-      { status: "researching", label: "Researching", message: "A research plan is ready; no search provider is configured, so sources are not being fetched." },
-      { status: "verifying", label: "Verifying", message: "No evidence is available to verify in the scaffold workflow." },
-      { status: "analyzing", label: "Analyzing", message: "Preparing an explicit unknowns-only placeholder report." },
-      { status: "quality_check", label: "Quality check", message: "Checking that unresearched claims are not presented as facts." },
-    ];
-
-    for (let index = 0; index < stages.length; index += 1) {
-      await pause(100);
-      job = await dependencies.jobs.findById(id);
-      if (!job || job.status === "cancelled") return;
-      const stage = stages[index];
-      const updated = await dependencies.jobs.update(id, {
-        status: stage.status,
-        currentStage: stage.label,
-        progress: { completedUnits: index + 2, totalUnits: 5, message: stage.message },
-      }, activeStatuses);
-      if (!updated) return;
-      await dependencies.events.append(id, stage.status, "stage", stage.message);
-    }
+    const researching = await dependencies.jobs.update(id, {
+      status: "researching", currentStage: "Searching sources and generating findings",
+      progress: { completedUnits: 2, totalUnits: 5, message: "Searching the web and analyzing retrieved evidence with your selected model." },
+    }, ["planning"]);
+    if (!researching) return;
+    await dependencies.events.append(id, "researching", "stage", "Searching the web and analyzing retrieved evidence with your selected model.");
+    const report = await dependencies.agent.runResearch(researching);
+    const checked = await dependencies.jobs.update(id, {
+      status: "quality_check", currentStage: "Saving evidence-linked report",
+      progress: { completedUnits: 4, totalUnits: 5, message: `Research returned ${report.sources.length} cited sources; citation and excerpt checks passed.` },
+    }, ["researching"]);
+    if (!checked) return;
+    await dependencies.events.append(id, "quality_check", "stage", `Citation checks passed for ${report.sources.length} sources. Saving report.`);
 
     job = await dependencies.jobs.findById(id);
     if (!job || job.status === "cancelled") return;
-    await dependencies.reports.save(id, createStubReport(job));
+    await dependencies.reports.save(id, report);
     const completed = await dependencies.jobs.update(id, {
       status: "completed",
-      currentStage: "Plan ready",
-      progress: { completedUnits: 5, totalUnits: 5, message: "Planning completed; no external research was run." },
+      currentStage: "Research complete",
+      progress: { completedUnits: 5, totalUnits: 5, message: "Research completed with cited sources and evidence gaps." },
       finishedAt: new Date(),
     }, ["quality_check"]);
-    if (completed) await dependencies.events.append(id, "completed", "status", "Workflow scaffold completed.");
+    if (completed) await dependencies.events.append(id, "completed", "status", "Research report completed.");
   }
 
   async function markFailed(id: string, cause: unknown) {
@@ -222,10 +213,8 @@ export function createResearchJobsService(dependencies: ResearchJobsServiceDepen
     }
   }
 
-  async function requireJob(id: string, ownerId: string) {
-    const job = ownerId
-      ? await dependencies.jobs.findByIdForOwner(id, ownerId)
-      : await dependencies.jobs.findById(id);
+  async function requireJob(id: string, scope: ResearchScope) {
+    const job = await dependencies.jobs.findByIdForScope(id, scope);
     if (!job) throw createAppError(404, "JOB_NOT_FOUND", "Research job not found.");
     return job;
   }

@@ -63,6 +63,8 @@ export interface ResearchAgentPlan {
 
 export interface ResearchJobRecord {
   _id: string;
+  tenantId: string;
+  workspaceId: string;
   ownerId: string | null;
   request: ResearchRequest;
   agentPlan?: ResearchAgentPlan;

@@ -32,12 +32,15 @@ function createMemoryJobsRepository(): ResearchJobsRepository & { records: Map<s
       const record = records.get(id);
       return record ? structuredClone(record) : null;
     },
-    async findByIdForOwner(id, ownerId) {
+    async findByIdForScope(id, scope) {
       const record = records.get(id);
-      return record?.ownerId === ownerId ? structuredClone(record) : null;
+      return record && record.ownerId === scope.ownerId && record.tenantId === scope.tenantId
+        && record.workspaceId === scope.workspaceId ? structuredClone(record) : null;
     },
-    async listForOwner(ownerId) {
-      return [...records.values()].filter((record) => record.ownerId === ownerId).map((record) => structuredClone(record));
+    async listForScope(scope, limit) {
+      return [...records.values()].filter((record) => record.ownerId === scope.ownerId
+        && record.tenantId === scope.tenantId && record.workspaceId === scope.workspaceId)
+        .slice(0, limit).map((record) => structuredClone(record));
     },
     async findByStatus(status: ResearchStatus) {
       return [...records.values()].filter((record) => record.status === status).map((record) => structuredClone(record));
@@ -95,10 +98,18 @@ const validRequest = {
   constraints: ["Use public information"],
   depth: "standard",
 };
-const ownerId = "test-user";
+const ownerId = { tenantId: "test-tenant", workspaceId: "test-workspace", ownerId: "test-user" };
 
 function createAgentMock(calls: ResearchJobRecord[] = []): ResearchAgent {
   return {
+    async runResearch() {
+      return {
+        researchStatus: "completed", summary: "Findings from a retrieved source. [S1]",
+        recommendation: "Review the cited evidence. [S1]", alternatives: [], comparison: [],
+        sources: [{ id: "S1", title: "Source", domain: "example.com", url: "https://example.com/", accessedAt: new Date().toISOString(), snippet: "A retrieved source excerpt.", reliability: "low" }],
+        uncertainties: ["Independent verification remains necessary."],
+      };
+    },
     async createPlan(job) {
       calls.push(structuredClone(job));
       return {
@@ -140,7 +151,7 @@ test("request validation rejects unknown properties and duplicate criteria", () 
   );
 });
 
-test("job is persisted before scheduling and completes with an explicit placeholder report", async () => {
+test("job is persisted before scheduling and completes with the real agent report", async () => {
   const jobs = createMemoryJobsRepository();
   const events = createMemoryEventsRepository();
   const reports = createMemoryReportsRepository();
@@ -164,14 +175,14 @@ test("job is persisted before scheduling and completes with an explicit placehol
 
   const job = await service.get(created.jobId, ownerId);
   assert.equal(job.status, "completed");
-  assert.equal(job.currentStage, "Plan ready");
+  assert.equal(job.currentStage, "Research complete");
   assert.equal(job.progress, 100);
-  assert.equal(job.sourceCount, 0);
+  assert.equal(job.sourceCount, 1);
   assert.equal(agentCalls.length, 1);
   assert.equal(agentCalls[0]._id, created.jobId);
   assert.equal((await jobs.findById(created.jobId))?.agentPlan?.tasks.length, 1);
-  assert.match(job.report?.summary ?? "", /No web research or external AI was run/);
-  assert.deepEqual(job.report?.sources, []);
+  assert.match(job.report?.summary ?? "", /Findings from a retrieved source/);
+  assert.equal(job.report?.sources[0].id, "S1");
   const [listed] = await service.list(ownerId);
   assert.deepEqual(Object.keys(listed.report ?? {}).sort(), [
     "alternatives",
@@ -182,12 +193,14 @@ test("job is persisted before scheduling and completes with an explicit placehol
     "summary",
     "uncertainties",
   ]);
-  assert.equal(job.report?.researchStatus, "not_run");
-  assert.deepEqual((await service.eventsAfter(created.jobId, 0, ownerId)).map((event) => event.sequence), [1, 2, 3, 4, 5, 6, 7, 8]);
-  await assert.rejects(service.get(created.jobId, "another-user"), { code: "JOB_NOT_FOUND" });
+  assert.equal(job.report?.researchStatus, "completed");
+  assert.deepEqual((await service.eventsAfter(created.jobId, 0, ownerId)).map((event) => event.sequence), [1, 2, 3, 4, 5, 6]);
+  await assert.rejects(service.get(created.jobId, { ...ownerId, ownerId: "another-user" }), { code: "JOB_NOT_FOUND" });
+  await assert.rejects(service.get(created.jobId, { ...ownerId, workspaceId: "another-workspace" }), { code: "JOB_NOT_FOUND" });
+  await assert.rejects(service.get(created.jobId, { ...ownerId, tenantId: "another-tenant" }), { code: "JOB_NOT_FOUND" });
 });
 
-test("cancelled jobs do not run the queued placeholder workflow", async () => {
+test("cancelled jobs do not execute queued research", async () => {
   const jobs = createMemoryJobsRepository();
   const events = createMemoryEventsRepository();
   const reports = createMemoryReportsRepository();
@@ -237,6 +250,7 @@ test("Agent failures are persisted as safe job error details", async () => {
     events,
     reports,
     agent: {
+      ...createAgentMock(),
       async createPlan() {
         throw createAppError(503, "AGENT_UNAVAILABLE", "The research agent is unavailable.", true);
       },
@@ -257,4 +271,35 @@ test("Agent failures are persisted as safe job error details", async () => {
     retryable: true,
   });
   assert.deepEqual(view.error, stored?.error);
+});
+
+test("research execution errors fail the job without saving a placeholder", async () => {
+  const jobs = createMemoryJobsRepository();
+  const reports = createMemoryReportsRepository();
+  const queued: Array<() => Promise<void>> = [];
+  const service = createResearchJobsService({ jobs, reports, events: createMemoryEventsRepository(),
+    agent: { ...createAgentMock(), async runResearch() {
+      throw createAppError(503, "SEARCH_NOT_CONFIGURED", "Set TAVILY_API_KEY in the agent environment.");
+    } }, schedule: (work) => queued.push(work) });
+  const created = await service.create(createResearchJobSchema.parse(validRequest), ownerId);
+  await queued[0]();
+  assert.equal((await jobs.findById(created.jobId))?.status, "failed");
+  assert.equal((await jobs.findById(created.jobId))?.error?.code, "SEARCH_NOT_CONFIGURED");
+  assert.equal(await reports.findByJobId(created.jobId), null);
+});
+
+test("cancellation during research discards the eventual provider result", async () => {
+  const jobs = createMemoryJobsRepository();
+  const reports = createMemoryReportsRepository();
+  const queued: Array<() => Promise<void>> = [];
+  const agent = createAgentMock();
+  const service = createResearchJobsService({ jobs, reports, events: createMemoryEventsRepository(),
+    agent: { ...agent, async runResearch(job) {
+      await service.cancel(job._id, ownerId);
+      return agent.runResearch(job);
+    } }, schedule: (work) => queued.push(work) });
+  const created = await service.create(createResearchJobSchema.parse(validRequest), ownerId);
+  await queued[0]();
+  assert.equal((await jobs.findById(created.jobId))?.status, "cancelled");
+  assert.equal(await reports.findByJobId(created.jobId), null);
 });

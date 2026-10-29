@@ -3,7 +3,6 @@ import { AuthUserRecord } from "./authUsers.types";
 
 const authUserSchema = new Schema<AuthUserRecord>(
   {
-    
     tenant_id: {
       type: mongoose.Schema.ObjectId,
       ref: "tenants",
@@ -130,5 +129,6 @@ const authUserSchema = new Schema<AuthUserRecord>(
 );
 
 authUserSchema.index({ email: 1 }, { unique: true });
+authUserSchema.index({ tenant_id: 1, active_workspace_id: 1 });
 
 export const AuthUserModel = model<AuthUserRecord>("users", authUserSchema);

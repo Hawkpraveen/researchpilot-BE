@@ -18,9 +18,15 @@ export async function hashPassword(password: string) {
 }
 
 export async function verifyPassword(password: string, storedHash: string) {
-  const [algorithm, salt, hash] = storedHash.split("$");
-  if (algorithm !== "scrypt" || !salt || !hash || !/^[a-f0-9]{128}$/i.test(hash)) return false;
-  const actual = await scrypt(password, salt);
-  const expected = Buffer.from(hash, "hex");
-  return timingSafeEqual(actual, expected);
+  try {
+    const [algorithm, salt, hash] = storedHash.split("$");
+    if (algorithm !== "scrypt" || !salt || !hash || !/^[a-f0-9]{128}$/i.test(hash)) return false;
+    const actual = await scrypt(password, salt);
+    const expected = Buffer.from(hash, "hex");
+    return actual.length === expected.length && timingSafeEqual(actual, expected);
+  } catch {
+    // Legacy or corrupted password hashes must behave like invalid credentials,
+    // never turn a login attempt into an internal server error.
+    return false;
+  }
 }

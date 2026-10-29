@@ -5,25 +5,29 @@ import { getAuthenticatedUser } from "../../helpers/auth/auth.helpers.js";
 import { createAppError } from "../../utils/AppError.js";
 
 export function createResearchJobsController(service: ResearchJobsService) {
+  const scope = (response: Parameters<RequestHandler>[1]) => {
+    const user = getAuthenticatedUser(response);
+    return { tenantId: user.tenant_id.toString(), workspaceId: user.workspace_id.toString(), ownerId: user.id.toString() };
+  };
   const list: RequestHandler = async (_request, response) => {
-    response.status(200).json(await service.list(getAuthenticatedUser(response).id));
+    response.status(200).json(await service.list(scope(response)));
   };
 
   const create: RequestHandler = async (request, response) => {
     const input = createResearchJobSchema.parse(request.body);
-    response.status(202).json(await service.create(input, getAuthenticatedUser(response).id));
+    response.status(202).json(await service.create(input, scope(response)));
   };
 
   const get: RequestHandler = async (request, response) => {
-    response.status(200).json(await service.get(request.params.jobId as string, getAuthenticatedUser(response).id));
+    response.status(200).json(await service.get(request.params.jobId as string, scope(response)));
   };
 
   const getReport: RequestHandler = async (request, response) => {
-    response.status(200).json(await service.getReport(request.params.jobId as string, getAuthenticatedUser(response).id));
+    response.status(200).json(await service.getReport(request.params.jobId as string, scope(response)));
   };
 
   const cancel: RequestHandler = async (request, response) => {
-    response.status(202).json(await service.cancel(request.params.jobId as string, getAuthenticatedUser(response).id));
+    response.status(202).json(await service.cancel(request.params.jobId as string, scope(response)));
   };
 
   const streamEvents: RequestHandler = async (request, response, next) => {
@@ -36,7 +40,7 @@ export function createResearchJobsController(service: ResearchJobsService) {
     }
 
     try {
-      await service.eventsAfter(jobId, sequence, getAuthenticatedUser(response).id);
+      await service.eventsAfter(jobId, sequence, scope(response));
     } catch (error) {
       next(error);
       return;
@@ -65,7 +69,7 @@ export function createResearchJobsController(service: ResearchJobsService) {
       if (closed || polling) return;
       polling = true;
       try {
-        const events = await service.eventsAfter(jobId, cursor, getAuthenticatedUser(response).id);
+        const events = await service.eventsAfter(jobId, cursor, scope(response));
         for (const event of events) {
           response.write(`id: ${event.sequence}\nevent: ${event.eventType}\ndata: ${JSON.stringify({
             jobId,

@@ -18,10 +18,14 @@ routers under `/api/v1`.
 
 The API also implements persistent research-job creation,
 status/list/report reads, cancellation, persisted event replay over SSE, and
-internal orchestration of the Agent's bounded planning endpoint. The Agent plan
-is validated and persisted by the API. Search, evidence verification, and
-report generation are not implemented; placeholder reports clearly disclose
-that they contain no verified findings.
+internal orchestration of the Agent's bounded planning and execution endpoints.
+The Agent plan is validated and persisted by the API, then real web research
+runs using the workspace's saved model settings. The API validates and stores
+the returned source-linked report. Configure `TAVILY_API_KEY` in the Python
+agent environment and your model in workspace Settings. Provider or evidence
+failures fail the job; no placeholder report is generated. Historical planning
+reports remain unchanged. Research requests use the depth's 60/180/300-second
+budget plus transport grace; `AGENT_TIMEOUT_MS` controls the short planning call.
 
 ## Local development
 
@@ -43,9 +47,22 @@ controlled by `AGENT_TIMEOUT_MS`. The frontend must call only this API.
 The frontend uses `POST /api/v1/auth/register` and `POST /api/v1/auth/login`,
 then sends the returned bearer token for `/api/v1/auth/me`, logout, and
 research-job requests. Sessions expire after seven days; only a hash of each
-session token is stored in MongoDB. Google/Microsoft/GitHub OAuth, phone OTP,
-2FA, password recovery, and account email verification are not implemented
-yet.
+session token is stored in MongoDB. GitHub OAuth, phone OTP, 2FA, password
+recovery, and email verification are not implemented yet. Google and Microsoft sign-in
+are implemented through browser popups: Google Identity Services and MSAL
+return ID tokens to the frontend, which posts them to `POST
+/api/v1/auth/google` or `POST /api/v1/auth/microsoft`. The backend verifies the
+tokens, creates or restores a session, and returns the usual bearer-session
+response. These are JSON token endpoints, not webhooks or provider redirect
+callbacks; `routes/index.ts` mounts the auth router under `/api/v1/auth`.
+
+Set the same public Google and Microsoft client IDs in this API's `.env` and
+the frontend's `VITE_GOOGLE_CLIENT_ID` and `VITE_MICROSOFT_CLIENT_ID`. Register
+the frontend origin (`http://localhost:8080`) as a Google JavaScript origin
+as well as the Microsoft SPA redirect URI (`http://localhost:8080/redirect.html`).
+The MSAL redirect bridge is served without COOP headers; apply the matching
+COOP policy only to the frontend application routes when deploying. Set `MICROSOFT_TENANT_ID` to
+`common` for both personal and work/school Microsoft accounts.
 
 The example database URL is local-only. Start MongoDB locally before starting
 the API. No production database credentials or seed data are used.

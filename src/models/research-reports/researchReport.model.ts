@@ -2,6 +2,8 @@ import { Schema, model } from "mongoose";
 import type { ResearchReportView } from "../research-jobs/researchJob.types.js";
 
 export interface ResearchReportRecord extends ResearchReportView {
+  tenantId: string;
+  workspaceId: string;
   jobId: string;
   schemaVersion: string;
   createdAt: Date;
@@ -9,6 +11,8 @@ export interface ResearchReportRecord extends ResearchReportView {
 
 const researchReportSchema = new Schema<ResearchReportRecord>(
   {
+    tenantId: { type: String, required: true, index: true },
+    workspaceId: { type: String, required: true, index: true },
     jobId: { type: String, required: true },
     schemaVersion: { type: String, required: true, default: "1.0" },
     researchStatus: { type: String, enum: ["not_run", "completed"], required: true, default: "not_run" },
@@ -51,6 +55,6 @@ const researchReportSchema = new Schema<ResearchReportRecord>(
   { timestamps: true, versionKey: false, collection: "research_reports" },
 );
 
-researchReportSchema.index({ jobId: 1 }, { unique: true });
+researchReportSchema.index({ tenantId: 1, workspaceId: 1, jobId: 1 }, { unique: true });
 
 export const ResearchReportModel = model<ResearchReportRecord>("ResearchReport", researchReportSchema);

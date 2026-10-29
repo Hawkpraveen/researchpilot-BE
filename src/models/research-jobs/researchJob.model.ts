@@ -72,6 +72,8 @@ const researchAgentPlanSchema = new Schema(
 const researchJobSchema = new Schema<ResearchJobRecord>(
   {
     _id: { type: String, required: true },
+    tenantId: { type: String, required: true, index: true },
+    workspaceId: { type: String, required: true, index: true },
     ownerId: { type: String, default: null },
     request: { type: requestSchema, required: true },
     agentPlan: { type: researchAgentPlanSchema, default: undefined },
@@ -93,7 +95,7 @@ const researchJobSchema = new Schema<ResearchJobRecord>(
   { timestamps: true, versionKey: false, collection: "research_jobs" },
 );
 
-researchJobSchema.index({ ownerId: 1, createdAt: -1 });
+researchJobSchema.index({ tenantId: 1, workspaceId: 1, ownerId: 1, createdAt: -1 });
 researchJobSchema.index({ status: 1, updatedAt: 1 });
 
 export const ResearchJobModel = model<ResearchJobRecord>("ResearchJob", researchJobSchema);

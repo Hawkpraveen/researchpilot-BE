@@ -4,7 +4,8 @@ import { hashPassword, verifyPassword } from "../src/helpers/auth/password.helpe
 import { loginSchema, registerSchema } from "../src/controllers/auth/auth.validation.js";
 
 const validRegistration = {
-  name: "Research User",
+  first_name: "Research",
+  last_name: "User",
   email: "  user@example.com ",
   password: "correct horse battery staple",
 };
