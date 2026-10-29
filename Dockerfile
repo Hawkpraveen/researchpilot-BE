@@ -19,6 +19,8 @@ COPY agent/app ./agent/app
 RUN python3 -m venv /opt/agent-venv \
     && /opt/agent-venv/bin/pip install --no-cache-dir ./agent
 COPY deploy/start.py ./deploy/start.py
+COPY deploy/check_agent_compatibility.py ./deploy/check_agent_compatibility.py
+RUN /opt/agent-venv/bin/python deploy/check_agent_compatibility.py
 ENV NODE_ENV=production HOST=0.0.0.0 PORT=10000 \
     AGENT_BASE_URL=http://127.0.0.1:8000 \
     PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
