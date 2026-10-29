@@ -1,5 +1,8 @@
 # ResearchPilot API
 
+For a free public deployment with the private Python agent in the same Docker
+service, follow [Render deployment instructions](deploy/RENDER.md).
+
 Node.js and Express API for ResearchPilot. This repository is intentionally
 separate from the web client and Python agent.
 

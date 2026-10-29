@@ -1,0 +1,3 @@
+[submodule "agent"]
+	path = agent
+	url = https://github.com/Hawkpraveen/researchpilot-agent.git

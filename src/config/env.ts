@@ -2,6 +2,7 @@ import { z } from "zod";
 
 const environmentSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
+  HOST: z.string().trim().min(1).default("127.0.0.1"),
   PORT: z.coerce.number().int().min(1).max(65535).default(5000),
   WEB_ORIGIN: z.string().url().default("http://localhost:8080"),
   MONGODB_URI: z.string().min(1).default("mongodb://127.0.0.1:27017/researchpilot"),

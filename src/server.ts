@@ -14,12 +14,12 @@ async function startServer() {
   await ensureProviderSettingsIndexes();
   await ResearchUsageModel.init();
   const app = createApp(environment.WEB_ORIGIN);
-  const server = app.listen(environment.PORT, "127.0.0.1");
+  const server = app.listen(environment.PORT, environment.HOST);
   await new Promise<void>((resolve, reject) => {
     server.once("listening", resolve);
     server.once("error", reject);
   });
-  console.log(`ResearchPilot BE listening on http://127.0.0.1:${environment.PORT} (PID ${process.pid})`);
+  console.log(`ResearchPilot BE listening on http://${environment.HOST}:${environment.PORT} (PID ${process.pid})`);
   console.log("[research] Lifecycle logging enabled; active agent requests log elapsed time every 10 seconds.");
   await researchJobsService.recoverInterruptedJobs();
 
