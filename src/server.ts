@@ -1,4 +1,5 @@
 import "dotenv/config";
+import { ensureConnectorIndexes } from "./repositories/connectors/connector.repository.js";
 import { createApp } from "./app.js";
 import { connectDatabase, disconnectDatabase } from "./config/database.js";
 import { loadEnvironment } from "./config/env.js";
@@ -13,6 +14,7 @@ async function startServer() {
   await ensureAuthSessionIndexes();
   await ensureProviderSettingsIndexes();
   await ResearchUsageModel.init();
+  await ensureConnectorIndexes();
   const app = createApp(environment.WEB_ORIGIN);
   const server = app.listen(environment.PORT, environment.HOST);
   await new Promise<void>((resolve, reject) => {

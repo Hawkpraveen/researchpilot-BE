@@ -98,6 +98,11 @@ localhost URL from a hosted service.
 
 ## Free-tier operation and updates
 
+Local models for external users use the paired desktop connector, not the
+developer-only manual tunnel. Deploy the connector API changes and the updated
+private agent together, then deploy the frontend and downloadable Windows ZIP.
+See the agent repository's `connector/DEPLOYMENT.md` for build and protocol details.
+
 - Use one instance. Job orchestration and rate limits currently assume one API
   process; running jobs fail on an API restart and require an explicit retry.
 - Render Free sleeps after 15 minutes without inbound traffic. Cold starts can

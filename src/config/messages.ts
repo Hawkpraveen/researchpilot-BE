@@ -1,5 +1,6 @@
 /** Public API messages. Keep stable error codes separate from presentation text. */
 export const messages = {
+  CONNECTOR_RATE_LIMITED: "Too many connector requests. Try again shortly.",
   NOT_FOUND: "The requested endpoint does not exist.",
   VALIDATION_ERROR: "The request body is invalid.",
   INVALID_JSON: "The request body must contain valid JSON.",

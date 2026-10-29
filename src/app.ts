@@ -19,6 +19,7 @@ export function createApp(webOrigin: string) {
     allowedHeaders: ["Authorization", "Content-Type", "Last-Event-ID", "X-Request-ID"],
     exposedHeaders: ["X-Request-ID", "Retry-After", "RateLimit-Limit", "RateLimit-Remaining", "RateLimit-Reset"],
   }));
+  app.use("/api/v1/connectors", express.json({ limit: "256kb", strict: true }));
   app.use(express.json({ limit: "32kb", strict: true }));
   app.use("/api/v1", createApiRoutes({
     researchJobsService,

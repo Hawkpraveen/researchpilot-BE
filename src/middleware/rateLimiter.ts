@@ -53,7 +53,7 @@ export function createRateLimiter(options: RateLimiterOptions): RequestHandler {
 }
 
 /** Authenticated workloads are isolated per tenant, workspace, and user. */
-export function createUserRateLimiter(policy: "researchCreate" | "providerTest"): RequestHandler {
+export function createUserRateLimiter(policy: "researchCreate" | "providerTest" | "connectorPair"): RequestHandler {
   return createRateLimiter({
     ...rateLimiterRegistry[policy],
     key: (_request, response) => {
