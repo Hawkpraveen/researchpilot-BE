@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 const boundedString = (max: number) => z.string().trim().min(1).max(max);
+export const updateResearchJobSchema = z.object({ title: boundedString(200) }).strict();
 
 export const createResearchJobSchema = z
   .object({
@@ -37,3 +38,9 @@ export const createResearchJobSchema = z
   });
 
 export type CreateResearchJobInput = z.infer<typeof createResearchJobSchema>;
+
+export const clarifyResearchSchema = z.object({
+  candidateIndex: z.number().int().min(0).max(3).optional(),
+  context: boundedString(500).optional(),
+}).strict().refine((value) => value.candidateIndex !== undefined || Boolean(value.context), "Choose a subject or provide context.");
+export type ClarifyResearchInput = z.infer<typeof clarifyResearchSchema>;

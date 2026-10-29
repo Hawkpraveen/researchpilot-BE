@@ -8,6 +8,7 @@ export interface ResearchJobsRepository {
   findByIdForScope(id: string, scope: { tenantId: string; workspaceId: string; ownerId: string }): Promise<ResearchJobRecord | null>;
   update(id: string, update: Partial<ResearchJobRecord>, allowedStatuses?: ResearchStatus[]): Promise<ResearchJobRecord | null>;
   findByStatus(status: ResearchStatus): Promise<ResearchJobRecord[]>;
+  updateForScope(id: string, scope: { tenantId: string; workspaceId: string; ownerId: string }, update: Pick<ResearchJobRecord, "title" | "deletedAt">, allowedStatuses?: ResearchStatus[]): Promise<ResearchJobRecord | null>;
 }
 
 export function createMongoResearchJobsRepository(): ResearchJobsRepository {
@@ -16,16 +17,16 @@ export function createMongoResearchJobsRepository(): ResearchJobsRepository {
       return (await ResearchJobModel.create(record)).toObject() as ResearchJobRecord;
     },
     findById(id) {
-      return ResearchJobModel.findById(id).lean<ResearchJobRecord>().exec();
+      return ResearchJobModel.findOne({ _id: id, deletedAt: null }).lean<ResearchJobRecord>().exec();
     },
     listForScope(scope, limit) {
-      return ResearchJobModel.find(scope).sort({ createdAt: -1 }).limit(limit).lean<ResearchJobRecord[]>().exec();
+      return ResearchJobModel.find({ ...scope, deletedAt: null }).sort({ createdAt: -1 }).limit(limit).lean<ResearchJobRecord[]>().exec();
     },
     findByIdForScope(id, scope) {
-      return ResearchJobModel.findOne({ _id: id, ...scope }).lean<ResearchJobRecord>().exec();
+      return ResearchJobModel.findOne({ _id: id, ...scope, deletedAt: null }).lean<ResearchJobRecord>().exec();
     },
     update(id, update, allowedStatuses) {
-      const filter = allowedStatuses ? { _id: id, status: { $in: allowedStatuses } } : { _id: id };
+      const filter = { _id: id, deletedAt: null, ...(allowedStatuses ? { status: { $in: allowedStatuses } } : {}) };
       return ResearchJobModel.findOneAndUpdate(
         filter,
         { $set: update, $inc: { version: 1 } },
@@ -35,7 +36,14 @@ export function createMongoResearchJobsRepository(): ResearchJobsRepository {
         .exec();
     },
     findByStatus(status) {
-      return ResearchJobModel.find({ status }).sort({ createdAt: 1 }).lean<ResearchJobRecord[]>().exec();
+      return ResearchJobModel.find({ status, deletedAt: null }).sort({ createdAt: 1 }).lean<ResearchJobRecord[]>().exec();
+    },
+    updateForScope(id, scope, update, allowedStatuses) {
+      return ResearchJobModel.findOneAndUpdate(
+        { _id: id, ...scope, deletedAt: null, ...(allowedStatuses ? { status: { $in: allowedStatuses } } : {}) },
+        { $set: update, $inc: { version: 1 } },
+        { new: true, runValidators: true },
+      ).lean<ResearchJobRecord>().exec();
     },
   };
 }

@@ -6,6 +6,7 @@ import { createResearchAgentClient } from "./services/research-agent/researchAge
 import { createResearchJobsService } from "./services/research-jobs/researchJobs.service.js";
 import { providerSettingsRepository } from "./repositories/settings/providerSettings.repository.js";
 import { defaultProviderSettings } from "./config/providerSettings.js";
+import { researchUsageRepository } from "./repositories/research-usage/researchUsage.repository.js";
 
 const environment = loadEnvironment();
 const jobs = createMongoResearchJobsRepository();
@@ -17,6 +18,6 @@ const agent = createResearchAgentClient(environment.AGENT_BASE_URL, environment.
   return config ? {
     mode: config.mode, provider: config.provider, endpoint: config.endpoint, model: config.model, apiKey: config.api_key ?? "",
   } : { ...defaultProviderSettings };
-});
+}, researchUsageRepository.save);
 
-export const researchJobsService = createResearchJobsService({ jobs, events, reports, agent });
+export const researchJobsService = createResearchJobsService({ jobs, events, reports, agent, usage: researchUsageRepository });

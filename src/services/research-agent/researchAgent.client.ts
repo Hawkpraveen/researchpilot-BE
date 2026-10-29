@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { randomUUID } from "node:crypto";
+import { usageSchema, summarizeUsage, type ResearchUsage, type UsageStatus } from "../research-jobs/researchUsage.js";
 import type { ResearchAgentPlan, ResearchJobRecord, ResearchReportView } from "../../models/research-jobs/researchJob.types.js";
 import { createAppError } from "../../utils/AppError.js";
 
@@ -38,7 +40,13 @@ export interface ResearchProviderConfig {
 }
 
 const reportSchema = z.object({
-  researchStatus: z.literal("completed"),
+  researchStatus: z.enum(["completed", "partial", "needs_clarification"]),
+  resolution: z.object({
+    status: z.enum(["resolved", "ambiguous", "unresolved"]), subject: z.string().max(300),
+    explanation: z.string().min(1).max(1000),
+    candidates: z.array(z.object({ label: z.string().min(1).max(150), description: z.string().min(1).max(500), sourceIds: z.array(z.string()).min(1).max(8) }).strict()).max(4),
+    selectedSourceIds: z.array(z.string()).max(8),
+  }).strict().optional(),
   summary: z.string().min(1).max(100000),
   recommendation: z.string().min(1).max(10000),
   alternatives: z.array(z.string()).max(10),
@@ -57,6 +65,7 @@ const reportSchema = z.object({
 
 const executionSchema = z.object({
   jobId: z.string(), contractVersion: z.literal("1.0"), researchExecuted: z.literal(true), report: reportSchema,
+  usage: usageSchema.optional(),
 }).strict();
 
 const executionErrors: Record<string, string> = {
@@ -67,6 +76,8 @@ const executionErrors: Record<string, string> = {
   SEARCH_INVALID_RESPONSE: "The web search provider returned invalid results.",
   MODEL_AUTH_FAILED: "The model API key was rejected. Check your saved provider settings.",
   MODEL_UNAVAILABLE: "The selected model could not be reached. Check the endpoint and model in Settings.",
+  MODEL_TIMEOUT: "The model did not respond within its request timeout. Check Ollama memory usage or choose a smaller installed model in Settings.",
+  SEARCH_TIMEOUT: "Web search timed out. Check the search connection and try again.",
   MODEL_INVALID_RESPONSE: "The model returned invalid research output. Try a model with structured JSON support.",
   UNSUPPORTED_EVIDENCE: "The model cited evidence that was not retrieved. No report was published. Try again.",
   NO_RESEARCH_EVIDENCE: "No usable web evidence was found. Try a more specific question.",
@@ -78,6 +89,7 @@ export function createResearchAgentClient(
     timeoutMs: number,
     fetcher: typeof fetch = fetch,
     loadProvider?: (job: ResearchJobRecord) => Promise<ResearchProviderConfig>,
+    recordUsage?: (job: ResearchJobRecord, usage: ResearchUsage, status: UsageStatus) => Promise<void>,
 ): ResearchAgent {
   const normalizedBaseUrl = baseUrl.replace(/\/+$/, "");
 
@@ -134,14 +146,34 @@ export function createResearchAgentClient(
     return parsed.data satisfies ResearchAgentPlan;
   }
   async function runResearch(job: ResearchJobRecord): Promise<ResearchReportView> {
+    const executionId = randomUUID();
+    let usage: ResearchUsage = { executionId, calls: [] };
+    const save = async (status: UsageStatus) => {
+      console.log("[usage]", { jobId: job._id, executionId, status, ...summarizeUsage(usage) });
+      try { await recordUsage?.(job, usage, status); }
+      catch (error) { console.error("[usage] Could not persist usage", { jobId: job._id, executionId, error }); }
+    };
+    await save("running");
+    try {
+      const report = await executeResearch(job, executionId, async (body) => {
+        const parsed = usageSchema.safeParse(typeof body === "object" && body !== null && "usage" in body ? body.usage : null);
+        if (parsed.success && parsed.data.executionId === executionId) { usage = parsed.data; await save("running"); }
+      });
+      await save("completed");
+      return report;
+    } catch (error) { await save("failed"); throw error; }
+  }
+
+  async function executeResearch(job: ResearchJobRecord, executionId: string, capture: (body: unknown) => Promise<void>): Promise<ResearchReportView> {
     if (!loadProvider) throw createAppError(503, "PROVIDER_NOT_CONFIGURED", executionErrors.PROVIDER_NOT_CONFIGURED);
     const provider = await loadProvider(job);
+    console.log("[research] Agent request started", { jobId: job._id, provider: provider.provider, model: provider.model });
     let response: Response;
     try {
       response = await fetcher(`${normalizedBaseUrl}/api/v1/research/run`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-Request-ID": job._id },
-        body: JSON.stringify({ jobId: job._id, contractVersion: job.contractVersion, request: job.request, provider }),
+        body: JSON.stringify({ executionId, jobId: job._id, contractVersion: job.contractVersion, request: job.request, provider, ...(job.resume ? { resume: job.resume } : {}) }),
         signal: AbortSignal.timeout(job.limits.timeoutSeconds * 1000 + 10000),
       });
     } catch (error) {
@@ -153,8 +185,11 @@ export function createResearchAgentClient(
     try { body = await response.json(); } catch {
       throw createAppError(502, "AGENT_CONTRACT_MISMATCH", "The research agent returned invalid research output.");
     }
+    await capture(body);
     if (!response.ok) {
       const failure = z.object({ error: z.object({ code: z.string(), retryable: z.boolean() }) }).safeParse(body);
+      console.error("[research] Agent request failed", { jobId: job._id, httpStatus: response.status,
+        code: failure.success && /^[A-Z_]{1,64}$/.test(failure.data.error.code) ? failure.data.error.code : "UNKNOWN_AGENT_ERROR" });
       if (failure.success && Object.hasOwn(executionErrors, failure.data.error.code)) {
         throw createAppError(503, failure.data.error.code, executionErrors[failure.data.error.code], failure.data.error.retryable);
       }
@@ -166,6 +201,12 @@ export function createResearchAgentClient(
     }
     const report = parsed.data.report;
     const ids = new Set(report.sources.map((source) => source.id));
+    const resolution = report.resolution;
+    if ((report.researchStatus === "needs_clarification" && (!resolution || resolution.status === "resolved"))
+      || (resolution && resolution.status !== "resolved" && report.researchStatus !== "needs_clarification")
+      || (resolution && [...resolution.selectedSourceIds, ...resolution.candidates.flatMap((candidate) => candidate.sourceIds)].some((id) => !ids.has(id)))) {
+      throw createAppError(502, "AGENT_CONTRACT_MISMATCH", "Subject resolution contains invalid evidence references.");
+    }
     const texts = [report.summary, report.recommendation, ...report.comparison.flatMap((row) => Object.values(row.values))];
     if (ids.size !== report.sources.length || report.sources.length > job.limits.maxPages
       || texts.some((text) => [...text.matchAll(/\[(S\d+)\]/g)].some((match) => !ids.has(match[1])))

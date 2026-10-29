@@ -130,3 +130,33 @@ test("returns safe actionable research configuration errors", async () => {
     return true;
   });
 });
+
+test("accepts grounded clarification choices and rejects invented resolution evidence", async () => {
+  const resolution = { status: "ambiguous", subject: "", explanation: "Two meanings remain.",
+    candidates: [{ label: "Company", description: "A software company", sourceIds: ["S1"] }, { label: "Score", description: "A clinical score", sourceIds: ["S1"] }], selectedSourceIds: [] };
+  const clarification = { ...execution, report: { ...execution.report, researchStatus: "needs_clarification", resolution } };
+  const client = createResearchAgentClient("http://127.0.0.1:8000", 1000,
+    async () => new Response(JSON.stringify(clarification)), async () => provider);
+  assert.equal((await client.runResearch(job)).researchStatus, "needs_clarification");
+  const invalid = { ...clarification, report: { ...clarification.report, resolution: { ...resolution, selectedSourceIds: ["S99"] } } };
+  const badClient = createResearchAgentClient("http://127.0.0.1:8000", 1000,
+    async () => new Response(JSON.stringify(invalid)), async () => provider);
+  await assert.rejects(badClient.runResearch(job), { code: "AGENT_CONTRACT_MISMATCH" });
+});
+
+test("persists usage on failed research and keeps each retry separate without counting updates twice", async () => {
+  const attempts = new Map<string, { status: string; calls: unknown[] }>();
+  const client = createResearchAgentClient("http://127.0.0.1:8000", 1000, async (_input, init) => {
+    const { executionId } = JSON.parse(String(init?.body));
+    return new Response(JSON.stringify({ error: { code: "MODEL_INVALID_RESPONSE", retryable: true }, usage: { executionId, calls: [{
+      provider: "tavily", stage: "search", model: null, httpStatus: 200, status: "completed", durationMs: 10,
+      inputTokens: null, outputTokens: null, cachedInputTokens: null, cacheWriteTokens: null, totalTokens: null, credits: 1,
+    }] } }), { status: 502 });
+  }, async () => provider, async (_job, usage, status) => { attempts.set(usage.executionId, { status, calls: usage.calls }); });
+  await assert.rejects(client.runResearch(job), { code: "MODEL_INVALID_RESPONSE" });
+  assert.equal(attempts.size, 1);
+  assert.equal([...attempts.values()][0].status, "failed");
+  assert.equal([...attempts.values()][0].calls.length, 1);
+  await assert.rejects(client.runResearch(job));
+  assert.equal(attempts.size, 2);
+});

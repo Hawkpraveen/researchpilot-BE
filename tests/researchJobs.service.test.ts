@@ -18,7 +18,7 @@ import type {
   ResearchReportsRepository,
 } from "../src/repositories/research-reports/researchReports.repository.js";
 import { createResearchJobsService } from "../src/services/research-jobs/researchJobs.service.js";
-import { createResearchJobSchema } from "../src/services/research-jobs/researchJobs.validation.js";
+import { createResearchJobSchema, updateResearchJobSchema } from "../src/services/research-jobs/researchJobs.validation.js";
 
 function createMemoryJobsRepository(): ResearchJobsRepository & { records: Map<string, ResearchJobRecord> } {
   const records = new Map<string, ResearchJobRecord>();
@@ -30,27 +30,35 @@ function createMemoryJobsRepository(): ResearchJobsRepository & { records: Map<s
     },
     async findById(id) {
       const record = records.get(id);
-      return record ? structuredClone(record) : null;
+      return record && !record.deletedAt ? structuredClone(record) : null;
     },
     async findByIdForScope(id, scope) {
       const record = records.get(id);
-      return record && record.ownerId === scope.ownerId && record.tenantId === scope.tenantId
+      return record && !record.deletedAt && record.ownerId === scope.ownerId && record.tenantId === scope.tenantId
         && record.workspaceId === scope.workspaceId ? structuredClone(record) : null;
     },
     async listForScope(scope, limit) {
-      return [...records.values()].filter((record) => record.ownerId === scope.ownerId
+      return [...records.values()].filter((record) => !record.deletedAt && record.ownerId === scope.ownerId
         && record.tenantId === scope.tenantId && record.workspaceId === scope.workspaceId)
         .slice(0, limit).map((record) => structuredClone(record));
     },
     async findByStatus(status: ResearchStatus) {
-      return [...records.values()].filter((record) => record.status === status).map((record) => structuredClone(record));
+      return [...records.values()].filter((record) => !record.deletedAt && record.status === status).map((record) => structuredClone(record));
     },
     async update(id, update, allowedStatuses) {
       const current = records.get(id);
-      if (!current || (allowedStatuses && !allowedStatuses.includes(current.status))) return null;
+      if (!current || current.deletedAt || (allowedStatuses && !allowedStatuses.includes(current.status))) return null;
       const next = { ...current, ...structuredClone(update), version: current.version + 1, updatedAt: new Date() };
       records.set(id, next);
       return structuredClone(next);
+    },
+    async updateForScope(id, scope, update, allowedStatuses) {
+      const record = records.get(id);
+      if (!record || record.deletedAt || record.ownerId !== scope.ownerId || record.tenantId !== scope.tenantId
+        || record.workspaceId !== scope.workspaceId || (allowedStatuses && !allowedStatuses.includes(record.status))) return null;
+      const updated = { ...record, ...update, updatedAt: new Date(), version: record.version + 1 };
+      records.set(id, updated);
+      return structuredClone(updated);
     },
   };
 }
@@ -99,6 +107,58 @@ const validRequest = {
   depth: "standard",
 };
 const ownerId = { tenantId: "test-tenant", workspaceId: "test-workspace", ownerId: "test-user" };
+
+test("report rename and deletion validate input, preserve evidence and enforce all scope boundaries", async () => {
+  const jobs = createMemoryJobsRepository();
+  const reports = createMemoryReportsRepository();
+  const queue: Array<() => Promise<void>> = [];
+  const service = createResearchJobsService({ jobs, reports, events: createMemoryEventsRepository(), agent: createAgentMock(), schedule: (work) => queue.push(work) });
+  const { jobId } = await service.create(createResearchJobSchema.parse(validRequest), ownerId);
+  await assert.rejects(service.remove(jobId, ownerId), { code: "JOB_ALREADY_ACTIVE" });
+  await queue.shift()!();
+  const original = await service.get(jobId, ownerId);
+  for (const scope of [{ ...ownerId, tenantId: "other" }, { ...ownerId, workspaceId: "other" }, { ...ownerId, ownerId: "other" }]) {
+    await assert.rejects(service.rename(jobId, "Unauthorized", scope), { code: "JOB_NOT_FOUND" });
+    await assert.rejects(service.remove(jobId, scope), { code: "JOB_NOT_FOUND" });
+  }
+  for (const title of [" ", "x".repeat(201)]) {
+    assert.equal(updateResearchJobSchema.safeParse({ title }).success, false);
+    await assert.rejects(service.rename(jobId, title, ownerId), { code: "INVALID_TITLE" });
+  }
+  assert.equal(updateResearchJobSchema.safeParse({ title: "Valid", ownerId: "other" }).success, false);
+  const renamed = await service.rename(jobId, "  Shortlist review  ", ownerId);
+  assert.equal(renamed.title, "Shortlist review");
+  assert.equal(renamed.question, original.question);
+  assert.deepEqual(renamed.report, original.report);
+  assert.equal((await service.list(ownerId))[0].title, "Shortlist review");
+  assert.ok(Number.isFinite(Date.parse(renamed.updatedAtIso!)));
+  await service.remove(jobId, ownerId);
+  assert.equal((await service.list(ownerId)).length, 0);
+  assert.ok(jobs.records.get(jobId)?.deletedAt);
+  assert.ok(reports.records.has(jobId));
+  await assert.rejects(service.get(jobId, ownerId), { code: "JOB_NOT_FOUND" });
+  await assert.rejects(service.getReport(jobId, ownerId), { code: "JOB_NOT_FOUND" });
+  await assert.rejects(service.eventsAfter(jobId, 0, ownerId), { code: "JOB_NOT_FOUND" });
+  await assert.rejects(service.getUsage(jobId, ownerId), { code: "JOB_NOT_FOUND" });
+  await assert.rejects(service.retry(jobId, ownerId), { code: "JOB_NOT_FOUND" });
+  await assert.rejects(service.rename(jobId, "Resurrect", ownerId), { code: "JOB_NOT_FOUND" });
+});
+
+test("deletion cannot archive a report that was concurrently restarted", async () => {
+  const jobs = createMemoryJobsRepository();
+  const queue: Array<() => Promise<void>> = [];
+  const service = createResearchJobsService({ jobs, reports: createMemoryReportsRepository(), events: createMemoryEventsRepository(), agent: createAgentMock(), schedule: (work) => queue.push(work) });
+  const { jobId } = await service.create(createResearchJobSchema.parse(validRequest), ownerId);
+  await queue.shift()!();
+  const updateForScope = jobs.updateForScope;
+  jobs.updateForScope = async (id, scope, update, allowedStatuses) => {
+    if (update.deletedAt) await jobs.update(id, { status: "queued" });
+    return updateForScope(id, scope, update, allowedStatuses);
+  };
+  await assert.rejects(service.remove(jobId, ownerId), { code: "JOB_CHANGED" });
+  assert.equal((await service.get(jobId, ownerId)).status, "queued");
+  assert.equal(jobs.records.get(jobId)?.deletedAt, undefined);
+});
 
 function createAgentMock(calls: ResearchJobRecord[] = []): ResearchAgent {
   return {
@@ -302,4 +362,94 @@ test("cancellation during research discards the eventual provider result", async
   await queued[0]();
   assert.equal((await jobs.findById(created.jobId))?.status, "cancelled");
   assert.equal(await reports.findByJobId(created.jobId), null);
+});
+
+test("persists clarification and partial outcomes without displaying them as completed research", async () => {
+  for (const status of ["needs_clarification", "partial"] as const) {
+    const jobs = createMemoryJobsRepository();
+    const reports = createMemoryReportsRepository();
+    const queue: Array<() => Promise<void>> = [];
+    const agent = createAgentMock();
+    const service = createResearchJobsService({ jobs, reports, events: createMemoryEventsRepository(),
+      agent: { ...agent, async runResearch(job) { return { ...await agent.runResearch(job), researchStatus: status,
+        resolution: { status: status === "needs_clarification" ? "unresolved" : "resolved", subject: "Subject", explanation: "Discovery evidence", candidates: [], selectedSourceIds: status === "partial" ? ["S1"] : [] } }; } },
+      schedule: (work) => queue.push(work) });
+    const created = await service.create(createResearchJobSchema.parse(validRequest), ownerId);
+    await queue[0]();
+    const view = await service.get(created.jobId, ownerId);
+    assert.equal(view.status, status);
+    assert.equal(view.report?.researchStatus, status);
+    assert.equal(view.report?.resolution?.explanation, "Discovery evidence");
+    assert.deepEqual(view.request?.criteria, validRequest.criteria);
+    assert.equal((await service.list(ownerId))[0].status, status);
+    assert.equal((await service.getReport(created.jobId, ownerId)).researchStatus, status);
+  }
+});
+
+test("retry reuses the record, hides the old report while running, and preserves event history", async () => {
+  const jobs = createMemoryJobsRepository();
+  const events = createMemoryEventsRepository();
+  const reports = createMemoryReportsRepository();
+  const queue: Array<() => Promise<void>> = [];
+  const service = createResearchJobsService({ jobs, events, reports, agent: createAgentMock(), schedule: (work) => queue.push(work) });
+  const created = await service.create(createResearchJobSchema.parse(validRequest), ownerId);
+  await queue.shift()!();
+  const before = await jobs.findById(created.jobId);
+  const count = events.records.length;
+  await assert.rejects(service.retry(created.jobId, { ...ownerId, workspaceId: "other" }), { code: "JOB_NOT_FOUND" });
+  const retried = await service.retry(created.jobId, ownerId);
+  assert.equal(retried.jobId, created.jobId);
+  assert.equal(jobs.records.size, 1);
+  const pending = await service.get(created.jobId, ownerId);
+  assert.equal(pending.status, "queued");
+  assert.equal(pending.report, undefined);
+  await assert.rejects(service.retry(created.jobId, ownerId), { code: "JOB_ALREADY_ACTIVE" });
+  await queue.shift()!();
+  assert.equal((await service.get(created.jobId, ownerId)).status, "completed");
+  assert.deepEqual((await jobs.findById(created.jobId))?.createdAt, before?.createdAt);
+  assert.equal(jobs.records.size, 1);
+  assert.ok(events.records.length > count);
+  assert.equal(reports.records.size, 1);
+});
+
+test("clarification resumes the existing job from its saved discovery and plan", async () => {
+  const jobs = createMemoryJobsRepository();
+  const reports = createMemoryReportsRepository();
+  const queue: Array<() => Promise<void>> = [];
+  const planCalls: ResearchJobRecord[] = [];
+  const agent = createAgentMock(planCalls);
+  const researchCalls: ResearchJobRecord[] = [];
+  const service = createResearchJobsService({ jobs, reports, events: createMemoryEventsRepository(), schedule: (work) => queue.push(work),
+    agent: { ...agent, async runResearch(job) {
+      researchCalls.push(structuredClone(job));
+      const report = await agent.runResearch(job);
+      return job.resume ? report : { ...report, researchStatus: "needs_clarification", resolution: { status: "ambiguous", subject: "", explanation: "Two possible subjects", selectedSourceIds: [],
+        candidates: [{ label: "Software company", description: "The business", sourceIds: ["S1"] }, { label: "Clinical score", description: "The concept", sourceIds: ["S1"] }] } };
+    } } });
+  const created = await service.create(createResearchJobSchema.parse(validRequest), ownerId);
+  await queue.shift()!();
+  await assert.rejects(service.retry(created.jobId, ownerId, { candidateIndex: 3 }), { code: "INVALID_SUBJECT_CHOICE" });
+  await service.retry(created.jobId, ownerId, { candidateIndex: 0 });
+  await queue.shift()!();
+  assert.equal(jobs.records.size, 1);
+  assert.equal(planCalls.length, 1);
+  assert.equal(researchCalls[1].resume?.subject, "Software company");
+  assert.equal(researchCalls[1].resume?.sources[0].id, "S1");
+  assert.deepEqual(researchCalls[1].request, researchCalls[0].request);
+  assert.equal((await service.get(created.jobId, ownerId)).status, "completed");
+});
+
+test("usage reads enforce ownership and label missing attempt counters as unknown", async () => {
+  const jobs = createMemoryJobsRepository();
+  const queue: Array<() => Promise<void>> = [];
+  let reads = 0;
+  const service = createResearchJobsService({ jobs, reports: createMemoryReportsRepository(), events: createMemoryEventsRepository(), agent: createAgentMock(),
+    schedule: (work) => queue.push(work), usage: { async list() { reads++; return [{ executionId: "attempt-1", status: "failed", calls: [] }]; } } });
+  const created = await service.create(createResearchJobSchema.parse(validRequest), ownerId);
+  await assert.rejects(service.getUsage(created.jobId, { ...ownerId, ownerId: "other" }), { code: "JOB_NOT_FOUND" });
+  assert.equal(reads, 0);
+  const usage = await service.getUsage(created.jobId, ownerId);
+  assert.equal(usage.totals.attemptsWithUnknownUsage, 1);
+  assert.equal(usage.totals.countersComplete, false);
+  assert.equal(usage.costUsd, null);
 });

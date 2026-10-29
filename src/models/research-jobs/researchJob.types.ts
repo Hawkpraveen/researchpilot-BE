@@ -62,7 +62,10 @@ export interface ResearchAgentPlan {
 }
 
 export interface ResearchJobRecord {
+  resume?: { subject: string; context: string; consumedPages: number; sources: ResearchReportView["sources"] } | null;
   _id: string;
+  title?: string;
+  deletedAt?: Date | null;
   tenantId: string;
   workspaceId: string;
   ownerId: string | null;
@@ -87,12 +90,15 @@ export interface ResearchJobRecord {
 }
 
 export interface ResearchJobView {
+  request?: ResearchRequest;
   id: string;
   title: string;
   question: string;
-  status: "queued" | "running" | "completed" | "failed";
+  status: "queued" | "running" | "completed" | "failed" | "needs_clarification" | "partial";
   createdAt: string;
   updatedAt: string;
+  createdAtIso?: string;
+  updatedAtIso?: string;
   progress: number;
   currentStage: string;
   sourceCount: number;
@@ -101,7 +107,14 @@ export interface ResearchJobView {
 }
 
 export interface ResearchReportView {
-  researchStatus: "not_run" | "completed";
+  researchStatus: "not_run" | "completed" | "partial" | "needs_clarification";
+  resolution?: {
+    status: "resolved" | "ambiguous" | "unresolved";
+    subject: string;
+    explanation: string;
+    candidates: Array<{ label: string; description: string; sourceIds: string[] }>;
+    selectedSourceIds: string[];
+  };
   summary: string;
   recommendation: string;
   alternatives: string[];

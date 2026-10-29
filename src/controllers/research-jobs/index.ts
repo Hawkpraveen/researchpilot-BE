@@ -12,10 +12,15 @@ export function createResearchJobsRouter(service: ResearchJobsService) {
   router.use(requireAuth);
   router.get("/", asyncHandler(controller.list));
   router.post("/", createUserRateLimiter("researchCreate"), asyncHandler(controller.create));
+  router.post("/:jobId/retry", createUserRateLimiter("researchCreate"), asyncHandler(controller.retry));
+  router.post("/:jobId/clarify", createUserRateLimiter("researchCreate"), asyncHandler(controller.clarify));
   router.get("/:jobId/events", asyncHandler(controller.streamEvents));
+  router.get("/:jobId/usage", asyncHandler(controller.getUsage));
   router.get("/:jobId/report", asyncHandler(controller.getReport));
   router.post("/:jobId/cancel", asyncHandler(controller.cancel));
   router.get("/:jobId", asyncHandler(controller.get));
+  router.patch("/:jobId", asyncHandler(controller.rename));
+  router.delete("/:jobId", asyncHandler(controller.remove));
 
   return router;
 }

@@ -72,11 +72,16 @@ const researchAgentPlanSchema = new Schema(
 const researchJobSchema = new Schema<ResearchJobRecord>(
   {
     _id: { type: String, required: true },
+    title: { type: String, trim: true, maxlength: 200 },
+    deletedAt: { type: Date, default: null },
     tenantId: { type: String, required: true, index: true },
     workspaceId: { type: String, required: true, index: true },
     ownerId: { type: String, default: null },
     request: { type: requestSchema, required: true },
     agentPlan: { type: researchAgentPlanSchema, default: undefined },
+    resume: { type: new Schema({ subject: { type: String, default: "" }, context: { type: String, default: "" }, consumedPages: Number,
+      sources: { type: [new Schema({ id: String, title: String, domain: String, url: String, accessedAt: String, snippet: String, reliability: String }, { _id: false })], default: [] },
+    }, { _id: false }), default: null },
     status: { type: String, enum: researchStatuses, required: true, default: "queued" },
     currentStage: { type: String, required: true, default: "Queued" },
     progress: { type: progressSchema, required: true },

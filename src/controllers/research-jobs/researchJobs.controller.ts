@@ -1,33 +1,100 @@
 import type { RequestHandler } from "express";
 import type { ResearchJobsService } from "../../services/research-jobs/researchJobs.service.js";
-import { createResearchJobSchema } from "../../services/research-jobs/researchJobs.validation.js";
+import {
+  createResearchJobSchema,
+  clarifyResearchSchema,
+  updateResearchJobSchema,
+} from "../../services/research-jobs/researchJobs.validation.js";
 import { getAuthenticatedUser } from "../../helpers/auth/auth.helpers.js";
 import { createAppError } from "../../utils/AppError.js";
 
 export function createResearchJobsController(service: ResearchJobsService) {
   const scope = (response: Parameters<RequestHandler>[1]) => {
     const user = getAuthenticatedUser(response);
-    return { tenantId: user.tenant_id.toString(), workspaceId: user.workspace_id.toString(), ownerId: user.id.toString() };
+    return {
+      tenantId: user.tenant_id.toString(),
+      workspaceId: user.workspace_id.toString(),
+      ownerId: user.id.toString(),
+    };
   };
   const list: RequestHandler = async (_request, response) => {
     response.status(200).json(await service.list(scope(response)));
   };
 
   const create: RequestHandler = async (request, response) => {
+    console.log("[research] Start request received", {
+      requestId: response.locals.requestId,
+    });
     const input = createResearchJobSchema.parse(request.body);
     response.status(202).json(await service.create(input, scope(response)));
   };
 
   const get: RequestHandler = async (request, response) => {
-    response.status(200).json(await service.get(request.params.jobId as string, scope(response)));
+    response
+      .status(200)
+      .json(await service.get(request.params.jobId as string, scope(response)));
+  };
+
+  const retry: RequestHandler = async (request, response) => {
+    response
+      .status(202)
+      .json(
+        await service.retry(request.params.jobId as string, scope(response)),
+      );
+  };
+  const rename: RequestHandler = async (request, response) => {
+    const { title } = updateResearchJobSchema.parse(request.body);
+    response
+      .status(200)
+      .json(
+        await service.rename(
+          request.params.jobId as string,
+          title,
+          scope(response),
+        ),
+      );
+  };
+  const remove: RequestHandler = async (request, response) => {
+    await service.remove(request.params.jobId as string, scope(response));
+    response.status(204).end();
+  };
+  const clarify: RequestHandler = async (request, response) => {
+    response
+      .status(202)
+      .json(
+        await service.retry(
+          request.params.jobId as string,
+          scope(response),
+          clarifyResearchSchema.parse(request.body),
+        ),
+      );
   };
 
   const getReport: RequestHandler = async (request, response) => {
-    response.status(200).json(await service.getReport(request.params.jobId as string, scope(response)));
+    response
+      .status(200)
+      .json(
+        await service.getReport(
+          request.params.jobId as string,
+          scope(response),
+        ),
+      );
+  };
+
+  const getUsage: RequestHandler = async (request, response) => {
+    response
+      .status(200)
+      .json(
+        await service.getUsage(request.params.jobId as string, scope(response)),
+      );
   };
 
   const cancel: RequestHandler = async (request, response) => {
-    response.status(202).json(await service.cancel(request.params.jobId as string, scope(response)));
+    response
+      .status(202)
+      .json(
+        await service.cancel(request.params.jobId as string, scope(response)),
+      );
   };
 
   const streamEvents: RequestHandler = async (request, response, next) => {
@@ -35,7 +102,13 @@ export function createResearchJobsController(service: ResearchJobsService) {
     const header = request.header("last-event-id");
     const sequence = header === undefined ? 0 : Number(header);
     if (!Number.isSafeInteger(sequence) || sequence < 0) {
-      next(createAppError(400, "INVALID_EVENT_ID", "Last-Event-ID must be a non-negative integer."));
+      next(
+        createAppError(
+          400,
+          "INVALID_EVENT_ID",
+          "Last-Event-ID must be a non-negative integer.",
+        ),
+      );
       return;
     }
 
@@ -69,16 +142,28 @@ export function createResearchJobsController(service: ResearchJobsService) {
       if (closed || polling) return;
       polling = true;
       try {
-        const events = await service.eventsAfter(jobId, cursor, scope(response));
+        const events = await service.eventsAfter(
+          jobId,
+          cursor,
+          scope(response),
+        );
         for (const event of events) {
-          response.write(`id: ${event.sequence}\nevent: ${event.eventType}\ndata: ${JSON.stringify({
-            jobId,
-            sequence: event.sequence,
-            stage: event.stage,
-            message: event.message,
-          })}\n\n`);
+          response.write(
+            `id: ${event.sequence}\nevent: ${event.eventType}\ndata: ${JSON.stringify(
+              {
+                jobId,
+                sequence: event.sequence,
+                stage: event.stage,
+                message: event.message,
+              },
+            )}\n\n`,
+          );
           cursor = event.sequence;
-          if (event.stage === "completed" || event.stage === "failed" || event.stage === "cancelled") {
+          if (
+            event.stage === "completed" ||
+            event.stage === "failed" ||
+            event.stage === "cancelled"
+          ) {
             cleanup();
             response.end();
             return;
@@ -90,7 +175,9 @@ export function createResearchJobsController(service: ResearchJobsService) {
         }
       } catch (error) {
         console.error("Research event stream polling failed", { jobId, error });
-        response.write("event: error\ndata: {\"code\":\"EVENT_STREAM_INTERRUPTED\"}\n\n");
+        response.write(
+          'event: error\ndata: {"code":"EVENT_STREAM_INTERRUPTED"}\n\n',
+        );
         cleanup();
         response.end();
         return;
@@ -103,5 +190,17 @@ export function createResearchJobsController(service: ResearchJobsService) {
     void poll();
   };
 
-  return { list, create, get, getReport, cancel, streamEvents };
+  return {
+    list,
+    create,
+    retry,
+    clarify,
+    get,
+    rename,
+    remove,
+    getReport,
+    getUsage,
+    cancel,
+    streamEvents,
+  };
 }

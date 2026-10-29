@@ -27,6 +27,19 @@ failures fail the job; no placeholder report is generated. Historical planning
 reports remain unchanged. Research requests use the depth's 60/180/300-second
 budget plus transport grace; `AGENT_TIMEOUT_MS` controls the short planning call.
 
+## Provider usage
+
+Each execution has a distinct `executionId` under the existing research job.
+Provider-reported token and Tavily credit counters are upserted into
+`research_usage`, including attempts that fail after consuming provider calls.
+Retries and clarification continuations add attempts; polling does not log usage.
+Read scoped history and reported totals at `GET /api/v1/research-jobs/:jobId/usage`.
+Both services emit `[usage]` logs without API keys, prompts, or search queries.
+Unknown counters remain null; reported totals are not a complete bill when
+providers omit usage or a request never returns. Currency cost stays unknown
+until a pricing/reconciliation policy is configured. This is observability,
+not a user credit balance or a billing deduction.
+
 ## Local development
 
 Requires Node.js 20 or later.
